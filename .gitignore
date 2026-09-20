@@ -1,0 +1,57 @@
+# Node.js dependencies
+node_modules/
+
+# Environment variables / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime / process files
+*.pid
+*.pid.lock
+pids/
+
+# Test / coverage output
+coverage/
+.nyc_output/
+
+# Build / cache output
+dist/
+build/
+.cache/
+.parcel-cache/
+.eslintcache
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.swp
+*~
+
+# Local telemetry / captures
+*.csv
+dualsense-hid-capture-*.json
+dualsense-imu-*.json
+
+# Local JoyShockMapper configs
+HaloInfinite.txt
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# PM2 logs / local state
+.pm2/
