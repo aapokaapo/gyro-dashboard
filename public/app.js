@@ -2,9 +2,9 @@
 'use strict';
 const $=id=>document.getElementById(id), SONY=0x054c, DS=0x0ce6, EDGE=0x0df2, ACC_RES=8192, GYRO_RES=1024, USB_LEN=63;
 const CAL={raw:null,gyro:null,accel:null,firmware:null,featureReports:new Map()};
-const S={device:null,link:'unknown',running:false,frozen:false,recording:false,calibrated:false,chartTimes:[],bias:{x:0,y:0,z:0},filter:{x:0,y:0,z:0,init:false},prev:{x:0,y:0,z:0},lastT:null,peakVel:0,peakAcc:0,samples:0,lastDt:0,angularAcceleration:0,history:[],csv:[],csvRows:0,rxCount:0,rxHz:0,rateWindowStart:0,displayPending:false,lastDisplayRow:null,pendingChartRows:[],gyroOff:false,profileVel:[],profileSensX:[],profileSensY:[],profileZones:{low:0,ramp:0,max:0}};
+const S={device:null,link:'unknown',running:false,frozen:false,recording:false,calibrated:false,chartTimes:[],bias:{x:0,y:0,z:0},filter:{x:0,y:0,z:0,init:false},prev:{x:0,y:0,z:0},lastT:null,peakVel:0,peakAcc:0,samples:0,lastDt:0,angularAcceleration:0,history:[],csv:[],csvRows:0,rxCount:0,rxHz:0,rateWindowStart:0,displayPending:false,lastDisplayRow:null,pendingChartRows:[],gyroOff:false,profileVel:[],profileSensX:[],profileSensY:[],profileZones:{low:0,ramp:0,max:0},profileSampleMs:0,profilePeakVel:0};
 const HID={capturing:false,count:0,byId:new Map(),lastId:null,lastLen:0,rxCount:0,rxHz:0,rateWindowStart:0,ids:new Map(),live:{id:0,bytes:null,hex:'',dirty:false},candidateTimer:0};
-const UI={raf:0,lastFrame:0,frameMs:33};
+const UI={raf:0,lastFrame:0,frameMs:33,lastProfile:0,lastHeat:0,lastTurnDist:0};
 const PARSER={gyroOffset:null,accelOffset:null};
 const cfg=()=>({deadzone:Math.max(0,+$('deadzone').value||0),velThreshold:Math.max(0,+$('velThreshold').value||0),accThreshold:Math.max(0,+$('accThreshold').value||0),historySize:Math.min(5000,Math.max(50,+$('historySize').value||600)),alpha:Math.min(1,Math.max(.01,+$('filterAlpha').value||.25)),filter:$('filterEnabled').checked,threshold:$('thresholdEnabled').checked});
 function s16(lo,hi){const v=(hi<<8)|lo;return v>0x7fff?v-0x10000:v} function mag(v){return Math.hypot(v.x,v.y,v.z)} function dz(v,d){return Math.abs(v)<d?0:v} function fmt(v,n=2){return Number.isFinite(v)?v.toFixed(n):'0.00'}
@@ -28,7 +28,7 @@ function updateAimingProfile(){
   const turns=HEAT.turns||[], angles=turns.map(t=>Math.hypot(t.x,t.y)), left=turns.filter(t=>t.x<0).length, right=turns.filter(t=>t.x>0).length;
   const validLR=left+right, vel=S.profileVel||[], sensX=S.profileSensX||[], sensY=S.profileSensY||[], zones=S.profileZones||{low:0,ramp:0,max:0};
   const med=percentile(angles,.5), p90=percentile(angles,.9), p95=percentile(angles,.95), max=angles.length?Math.max(...angles):0;
-  const vm=percentile(vel,.5), vp90=percentile(vel,.9), vp95=percentile(vel,.95), vmax=vel.length?Math.max(...vel):0;
+  const vm=percentile(vel,.5), vp90=percentile(vel,.9), vp95=percentile(vel,.95), vmax=S.profilePeakVel||0;
   const sxm=percentile(sensX,.5), sx90=percentile(sensX,.9), sym=percentile(sensY,.5), sy90=percentile(sensY,.9);
   const ztotal=zones.low+zones.ramp+zones.max, pct=v=>ztotal?100*v/ztotal:0;
   $('profileTurns').textContent=turns.length; $('profileMedianTurn').textContent=fmt(med,1)+'°'; $('profileP90Turn').textContent=fmt(p90,1)+'°'; $('profileP95Turn').textContent=fmt(p95,1)+'°'; $('profileMaxTurn').textContent=fmt(max,1)+'°';
@@ -38,7 +38,7 @@ function updateAimingProfile(){
   $('profileSensZones').textContent=`${pct(zones.low).toFixed(1)}% / ${pct(zones.ramp).toFixed(1)}% / ${pct(zones.max).toFixed(1)}%`;
   const rampPct=pct(zones.ramp), minX=JSM.loaded?Math.min(JSM.minSens.x,JSM.maxSens.x):0, minY=JSM.loaded?Math.min(JSM.minSens.y,JSM.maxSens.y):0;
   const inconsistent=JSM.loaded && rampPct>50 && sensX.length && sensY.length && Math.abs(sxm-minX)<0.005 && Math.abs(sym-minY)<0.005;
-  $('profileSummary').textContent=turns.length?`Profile uses ${turns.length} completed turns and ${vel.length.toLocaleString()} active IMU samples (up to ~16.7 min at 1000 Hz). Velocity uses the same processed magnitude written to CSV. Sensitivity is reported separately for horizontal (X) and vertical (Y). Low / ramp / max is time-weighted from IMU sample duration using the loaded JSM MIN/MAX_GYRO_THRESHOLD values. GYRO_OFF is excluded.${inconsistent?' ⚠ Consistency warning: most time is in the sensitivity ramp but both median sensitivities equal their configured minima; inspect the loaded JSM configuration or telemetry.':''}`:'Play a session to build an aiming profile. GYRO_OFF samples are excluded.';
+  $('profileSummary').textContent=turns.length?`Profile uses ${turns.length} completed turns and ${vel.length.toLocaleString()} 100 Hz profile samples (up to ~16.7 min). Peak velocity and sensitivity-zone timing remain full-rate; percentile sampling is decimated to keep the UI responsive. Velocity uses the same processed magnitude written to CSV. Sensitivity is reported separately for horizontal (X) and vertical (Y). Low / ramp / max is time-weighted from IMU sample duration using the loaded JSM MIN/MAX_GYRO_THRESHOLD values. GYRO_OFF is excluded.${inconsistent?' ⚠ Consistency warning: most time is in the sensitivity ramp but both median sensitivities equal their configured minima; inspect the loaded JSM configuration or telemetry.':''}`:'Play a session to build an aiming profile. GYRO_OFF samples are excluded.';
 }
 function profileZone(speed){
   if(!JSM.loaded)return 'ramp';
@@ -61,7 +61,18 @@ function saveCurrentRun(){
 function addHistory(r){const max=cfg().historySize;S.history.push(r);if(S.history.length>max)S.history.splice(0,S.history.length-max)}
 function renderHistory(){const b=$('historyBody');const frag=document.createDocumentFragment();for(const x of S.history.slice(-120).reverse()){const tr=document.createElement('tr');[new Date(x.timestamp).toLocaleTimeString(),fmt(x.gx),fmt(x.gy),fmt(x.gz),fmt(x.vm),fmt(x.aa),fmt(x.ax,3),fmt(x.ay,3),fmt(x.az,3),fmt(x.pitch),fmt(x.roll)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});frag.appendChild(tr)}b.replaceChildren(frag)}
 function scheduleUI(row){S.lastDisplayRow=row;if(S.displayPending||S.frozen)return;S.displayPending=true;requestAnimationFrame(flushUI)}
-function flushUI(){S.displayPending=false;const row=S.lastDisplayRow;if(!row)return;renderLive(S.processed,S.accel,S.orientation);renderHistory();while(S.pendingChartRows.length)charts(S.pendingChartRows.shift(),true);const entries=[...SH.bins.entries()].sort((a,b)=>a[0]-b[0]);sChart.data.labels=entries.map(x=>x[0].toFixed(2));sChart.data.datasets[0].data=entries.map(x=>x[1]);updateVelocityScale();vChart.update('none');aChart.update('none');sChart.update('none');stChart.update('none');updateAimingProfile();if(HID.live.dirty){$('hidHex').textContent=HID.live.hex;HID.live.dirty=false}}
+function flushUI(now=performance.now()){
+  S.displayPending=false;const row=S.lastDisplayRow;if(!row)return;
+  renderLive(S.processed,S.accel,S.orientation);renderHistory();
+  while(S.pendingChartRows.length)charts(S.pendingChartRows.shift(),true);
+  const entries=[...SH.bins.entries()].sort((a,b)=>a[0]-b[0]);sChart.data.labels=entries.map(x=>x[0].toFixed(2));sChart.data.datasets[0].data=entries.map(x=>x[1]);
+  updateVelocityScale();vChart.update('none');aChart.update('none');sChart.update('none');stChart.update('none');
+  // Expensive statistics and heatmap work are throttled independently from live charts.
+  if(now-UI.lastProfile>=1000){UI.lastProfile=now;updateAimingProfile();}
+  if(HEAT.dirty && now-UI.lastHeat>=100){UI.lastHeat=now;drawHeatmap();HEAT.dirty=false;}
+  if(HEAT.distDirty && now-UI.lastTurnDist>=500){UI.lastTurnDist=now;renderTurnDistribution();HEAT.distDirty=false;}
+  if(HID.live.dirty){$('hidHex').textContent=HID.live.hex;HID.live.dirty=false}
+}
 
 const header=['timestamp','rawGyroX_deg_s','rawGyroY_deg_s','rawGyroZ_deg_s','processedGyroX_deg_s','processedGyroY_deg_s','processedGyroZ_deg_s','velocityMagnitude_deg_s','angularAcceleration_deg_s2','accelerometerX_g','accelerometerY_g','accelerometerZ_g','accelerometerMagnitude_g','pitch_deg','roll_deg','effectiveSensitivity','accelerationMultiplier'];
 function esc(v){const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replaceAll('"','""')+'"':s}
@@ -206,7 +217,7 @@ function updateSensitivityTimelineScale(){
   else { const pad=(hi-lo)*0.1; lo=Math.max(0,lo-pad); hi+=pad; }
   y.min=Math.floor(lo*20)/20; y.max=Math.ceil(hi*20)/20;
 }
-const HEAT={size:41,grid:null,peak:1,lastDraw:0,maxAngle:100,turns:[],active:{x:0,y:0,ms:0,moving:false},lastMove:false,scalePercentile:0.90};
+const HEAT={size:41,grid:null,peak:1,maxAngle:100,turns:[],active:{x:0,y:0,ms:0,moving:false},lastMove:false,scalePercentile:0.90,dirty:true,distDirty:true};
 function heatSensitivityRatio(){
   if(!JSM.loaded)return 1;
   const x=Number(JSM.maxSens?.x ?? JSM.gyroSens?.x), y=Number(JSM.maxSens?.y ?? JSM.gyroSens?.y);
@@ -265,10 +276,16 @@ function renderTurnDistribution(){
   });
   bins.replaceChildren(frag);
 }
-function resetHeatmap(){HEAT.turns=[];HEAT.maxAngle=100;rebuildHeatGrid();HEAT.active={x:0,y:0,ms:0,moving:false};renderTurnDistribution();drawHeatmap();}
+function resetHeatmap(){HEAT.turns=[];HEAT.maxAngle=100;rebuildHeatGrid();HEAT.active={x:0,y:0,ms:0,moving:false};HEAT.dirty=true;HEAT.distDirty=true;renderTurnDistribution();drawHeatmap();}
 function commitHeatTurn(){
   const a=HEAT.active; const angle=Math.hypot(a.x,a.y); if(angle>=3){
-    HEAT.turns.push({x:a.x,y:a.y}); if(HEAT.turns.length>3000)HEAT.turns.splice(0,HEAT.turns.length-3000); updateHeatScale(); rebuildHeatGrid(); renderTurnDistribution(); updateAimingProfile();
+    const oldScale=HEAT.maxAngle;
+    HEAT.turns.push({x:a.x,y:a.y}); if(HEAT.turns.length>3000)HEAT.turns.splice(0,HEAT.turns.length-3000);
+    updateHeatScale();
+    // Rebuild only when the percentile scale changes. Otherwise update one cell.
+    if(oldScale!==HEAT.maxAngle) rebuildHeatGrid();
+    else {const i=heatCellIndex(a.x,a.y);if(i>=0){HEAT.grid[i]+=1;HEAT.peak=Math.max(HEAT.peak,HEAT.grid[i]);}}
+    HEAT.dirty=true;HEAT.distDirty=true;
   }
   HEAT.active={x:0,y:0,ms:0,moving:false};
 }
@@ -409,11 +426,19 @@ function processIMU(rawCounts,accCounts,timestamp,gyroOff=false){
     // Use the exact processed velocity that is written to CSV as the profile's canonical velocity.
     // Retain up to ~16.7 minutes at 1000 Hz so a normal Halo session is not replaced by only the final ~100 seconds.
     const profileVelocity=velocity;
-    S.profileVel.push(profileVelocity); S.profileSensX.push(Number.isFinite(jsm.sx)?jsm.sx:1); S.profileSensY.push(Number.isFinite(jsm.sy)?jsm.sy:1); S.profileZones[profileZone(inputSpeed)]+=dt;
-    const PROFILE_MAX_SAMPLES=1000000;
-    if(S.profileVel.length>PROFILE_MAX_SAMPLES){const drop=S.profileVel.length-PROFILE_MAX_SAMPLES;S.profileVel.splice(0,drop);S.profileSensX.splice(0,drop);S.profileSensY.splice(0,drop);}
+    S.profilePeakVel=Math.max(S.profilePeakVel,profileVelocity);
+    S.profileZones[profileZone(inputSpeed)]+=dt;
+    // 100 Hz profile sampling is ample for percentile statistics and avoids sorting
+    // up to one million values on the UI thread. Zone timing and peak remain full-rate.
+    S.profileSampleMs+=Math.max(0,S.lastDt||0);
+    if(S.profileSampleMs>=10){
+      S.profileSampleMs%=10;
+      S.profileVel.push(profileVelocity); S.profileSensX.push(Number.isFinite(jsm.sx)?jsm.sx:1); S.profileSensY.push(Number.isFinite(jsm.sy)?jsm.sy:1);
+      const PROFILE_MAX_SAMPLES=100000;
+      if(S.profileVel.length>PROFILE_MAX_SAMPLES){const drop=S.profileVel.length-PROFILE_MAX_SAMPLES;S.profileVel.splice(0,drop);S.profileSensX.splice(0,drop);S.profileSensY.splice(0,drop);}
+    }
   }
-  if(!gyroOff){addHeat(cameraX,cameraY,S.lastDt);if(performance.now()-HEAT.lastDraw>50){HEAT.lastDraw=performance.now();drawHeatmap();}} else if(HEAT.active.moving){commitHeatTurn();drawHeatmap();}
+  if(!gyroOff){addHeat(cameraX,cameraY,S.lastDt);} else if(HEAT.active.moving){commitHeatTurn();}
   const row={timestamp:new Date().toISOString(),rawGyroX_deg_s:S.raw.x,rawGyroY_deg_s:S.raw.y,rawGyroZ_deg_s:S.raw.z,processedGyroX_deg_s:p.x,processedGyroY_deg_s:p.y,processedGyroZ_deg_s:p.z,velocityMagnitude_deg_s:velocity,angularAcceleration_deg_s2:S.angularAcceleration,accelerometerX_g:a.x,accelerometerY_g:a.y,accelerometerZ_g:a.z,accelerometerMagnitude_g:mag(a),pitch_deg:o.pitch,roll_deg:o.roll,effectiveSensitivity:(Number.isFinite(jsm.sens)?jsm.sens:1),accelerationMultiplier:jsm.accelMult,gyroOff, cameraGyroX_deg_s:cameraX,cameraGyroY_deg_s:cameraY};
   addHistory({timestamp:row.timestamp,gx:p.x,gy:p.y,gz:p.z,vm:velocity,aa:S.angularAcceleration,ax:a.x,ay:a.y,az:a.z,pitch:o.pitch,roll:o.roll});
   csv(row);S.pendingChartRows.push(row);if(S.pendingChartRows.length>8)S.pendingChartRows.splice(0,S.pendingChartRows.length-8);scheduleUI(row);
@@ -448,7 +473,7 @@ async function connect(){if(!('hid' in navigator)){banner('WebHID is not availab
 async function open(d){S.device=d;if(!d.opened)await d.open();S.link=detectLink(d);d.oninputreport=parseReport;$('model').textContent=d.productName||((d.productId===EDGE)?'DualSense Edge':'DualSense');$('vidpid').textContent='054C:'+d.productId.toString(16).padStart(4,'0').toUpperCase();$('transport').textContent=S.link.toUpperCase();showStatus('Initializing · '+S.link.toUpperCase(),true);banner('Reading DualSense factory calibration (feature 0x05) and firmware info (0x20)…');await initializeController();S.running=true;S.lastT=null;showStatus('Connected · '+S.link.toUpperCase(),true);banner(CAL.gyro&&CAL.accel?'Factory calibration loaded. IMU values are now normalized using the controller calibration.':'Factory calibration could not be read; using standard sensor scaling.')}function detectLink(d){for(const c of d.collections||[]){if(c.usagePage===1&&c.usage===5){const bits=c.inputReports?.reduce((m,r)=>Math.max(m,r.items.reduce((s,i)=>s+i.reportSize*i.reportCount,0)),0)||0;if(bits===616)return'bluetooth';if(bits===504)return'usb'}}return'unknown'}
 async function disconnect(){if(S.device){try{S.device.oninputreport=null;await S.device.close()}catch(e){} }S.device=null;S.running=false;setGyroOff(false);showStatus('Not connected');$('model').textContent='—';$('transport').textContent='—'}
 navigator.hid?.addEventListener('disconnect',e=>{if(e.device===S.device)disconnect()});
-$('refreshInit').onclick=async()=>{if(!S.device){banner('Connect the controller first.');return}banner('Refreshing DualSense initialization reports…');await initializeController();banner(CAL.gyro&&CAL.accel?'Factory calibration refreshed.':'Calibration read failed; standard scaling remains active.')};$('connect').onclick=connect;$('disconnect').onclick=disconnect;$('calibrate').onclick=()=>{if(!S.running){banner('Connect the controller first.');return}S.bias={...S.raw};S.filter={x:0,y:0,z:0,init:false};S.prev={x:0,y:0,z:0};S.calibrated=true;showStatus('Gyro calibrated',true)};$('freeze').onclick=()=>{S.frozen=!S.frozen;$('freeze').textContent=S.frozen?'Unfreeze display':'Freeze display'};$('record').onclick=()=>{if(!S.recording){S.recording=true;S.csv=[];S.csvRows=0;$('record').textContent='Stop & download CSV';$('record').classList.add('danger')}else{S.recording=false;download();$('record').textContent='Start CSV recording';$('record').classList.remove('danger')}renderLive()};$('clear').onclick=()=>{S.history=[];S.samples=0;S.peakVel=0;S.profileVel=[];S.profileSensX=[];S.profileSensY=[];S.profileZones={low:0,ramp:0,max:0};S.peakAcc=0;S.csv=[];S.csvRows=0;S.chartTimes=[];vChart.data.labels=[];vChart.data.datasets.forEach(d=>d.data=[]);aChart.data.labels=[];aChart.data.datasets[0].data=[];vChart.update('none');aChart.update('none');$('historyBody').innerHTML='';SH.bins.clear();resetHeatmap();sChart.data.labels=[];sChart.data.datasets[0].data=[];stChart.data.labels=[];stChart.data.datasets[0].data=[];updateSensitivityTimelineScale();sChart.update('none');stChart.update('none');S.pendingChartRows.length=0;updateAimingProfile();renderLive({x:0,y:0,z:0},{x:0,y:0,z:0},{pitch:0,roll:0})};
+$('refreshInit').onclick=async()=>{if(!S.device){banner('Connect the controller first.');return}banner('Refreshing DualSense initialization reports…');await initializeController();banner(CAL.gyro&&CAL.accel?'Factory calibration refreshed.':'Calibration read failed; standard scaling remains active.')};$('connect').onclick=connect;$('disconnect').onclick=disconnect;$('calibrate').onclick=()=>{if(!S.running){banner('Connect the controller first.');return}S.bias={...S.raw};S.filter={x:0,y:0,z:0,init:false};S.prev={x:0,y:0,z:0};S.calibrated=true;showStatus('Gyro calibrated',true)};$('freeze').onclick=()=>{S.frozen=!S.frozen;$('freeze').textContent=S.frozen?'Unfreeze display':'Freeze display'};$('record').onclick=()=>{if(!S.recording){S.recording=true;S.csv=[];S.csvRows=0;$('record').textContent='Stop & download CSV';$('record').classList.add('danger')}else{S.recording=false;download();$('record').textContent='Start CSV recording';$('record').classList.remove('danger')}renderLive()};$('clear').onclick=()=>{S.history=[];S.samples=0;S.peakVel=0;S.profileVel=[];S.profileSensX=[];S.profileSensY=[];S.profileZones={low:0,ramp:0,max:0};S.profileSampleMs=0;S.profilePeakVel=0;S.peakAcc=0;S.csv=[];S.csvRows=0;S.chartTimes=[];vChart.data.labels=[];vChart.data.datasets.forEach(d=>d.data=[]);aChart.data.labels=[];aChart.data.datasets[0].data=[];vChart.update('none');aChart.update('none');$('historyBody').innerHTML='';SH.bins.clear();resetHeatmap();sChart.data.labels=[];sChart.data.datasets[0].data=[];stChart.data.labels=[];stChart.data.datasets[0].data=[];updateSensitivityTimelineScale();sChart.update('none');stChart.update('none');S.pendingChartRows.length=0;updateAimingProfile();renderLive({x:0,y:0,z:0},{x:0,y:0,z:0},{pitch:0,roll:0})};
 S.processed={x:0,y:0,z:0};S.accel={x:0,y:0,z:0};S.orientation={pitch:0,roll:0};renderLive();
 
 $('saveRun').onclick=saveCurrentRun; renderRuns();

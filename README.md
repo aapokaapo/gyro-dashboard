@@ -9,6 +9,8 @@ Node.js + Express + browser WebHID dashboard for Sony DualSense and DualSense Ed
 - `public/app.js` — dashboard/WebHID application logic
 - `package.json` — Node.js metadata
 
+The obsolete `script1.js` and `script2.js` files have been removed. Application code is served as `public/app.js`.
+
 ## Run
 
 ```bash
@@ -48,3 +50,12 @@ The dashboard calculates a live session profile from completed FPS-perspective t
 
 ## v26 heatmap scaling
 The FPS-perspective turn heatmap now auto-scales to the 90th percentile of completed turn extent, rounded to 10 degrees with a 50-degree minimum. Rare large turns remain in turn-distribution/profile statistics but no longer expand the heatmap or get clamped onto its edge.
+
+## v27 performance changes
+- Heatmap rendering no longer runs from the ~1000 Hz HID input callback.
+- Completed turns mark the heatmap dirty; canvas redraw is capped at 10 Hz from the UI animation frame.
+- Heat grid is rebuilt only when the percentile-based heatmap scale changes; normal turns update one grid cell.
+- Turn distribution DOM rendering is capped at 2 Hz.
+- Aiming-profile percentile calculation is capped at 1 Hz and uses a 100 Hz statistical sample (up to ~16.7 minutes / 100,000 samples).
+- Peak velocity and low/ramp/max sensitivity-zone timing remain full-rate.
+- Live telemetry graphs retain their existing animation-frame update path.
