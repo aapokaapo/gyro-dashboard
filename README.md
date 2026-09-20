@@ -9,8 +9,6 @@ Node.js + Express + browser WebHID dashboard for Sony DualSense and DualSense Ed
 - `public/app.js` — dashboard/WebHID application logic
 - `package.json` — Node.js metadata
 
-The obsolete `script1.js` and `script2.js` files have been removed. Application code is served as `public/app.js`.
-
 ## Run
 
 ```bash
